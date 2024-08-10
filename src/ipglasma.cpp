@@ -12,7 +12,7 @@
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
-
+#include <array>
 
 using std::cout;
 using std::cerr;
@@ -176,6 +176,156 @@ double IPGlasma::Amplitude(double xpom, double q1[2], double q2[2] )
      
     return result;
 }
+
+std::array<double, 6>  IPGlasma::TMDs(double xpom, double q1[2], double q2[2] )
+{
+    ApplyPeriodicBoundaryConditions(q1);
+    ApplyPeriodicBoundaryConditions(q2);
+    
+    // Out of grid? Return 0 (probably very large dipole)
+
+    if (q1[0] < xcoords[0] or q1[0] > xcoords[xcoords.size()-1]
+        or q1[1] < ycoords[0] or q1[1] > ycoords[ycoords.size()-1]
+        or q2[0] < xcoords[0] or q2[0] > xcoords[xcoords.size()-1]
+        or q2[1] < ycoords[0] or q2[1] > ycoords[ycoords.size()-1])
+    {
+        if (periodic_boundary_conditions)
+            cerr << "WTF, I'm here..." << endl;
+            
+        return 0;
+        
+    } 
+
+    double  r = sqrt( pow(q1[0]-q2[0],2) + pow(q1[1]-q2[1],2));
+
+	// Smaller dipole than the grid
+	if (r < std::abs( xcoords[1] - xcoords[0])) 
+			return 0;	
+	
+    if (schwinger and r > schwinger_rc)
+    {
+	    if (q1[0] < xcoords[0]) q1[0] = xcoords[0];
+	    if (q1[1] < xcoords[0]) q1[1] = xcoords[0];
+	    if (q2[0] < xcoords[0]) q2[0] = xcoords[0];
+	    if (q2[1] < xcoords[0]) q2[1] = xcoords[0];
+	    if (q1[0] > xcoords[xcoords.size()-1]) q1[0] = xcoords[xcoords.size()-1];
+	    if (q2[0] > xcoords[xcoords.size()-1]) q2[0] = xcoords[xcoords.size()-1];
+	    if (q1[1] > xcoords[xcoords.size()-1]) q1[1] = xcoords[xcoords.size()-1];
+            if (q2[1] > xcoords[xcoords.size()-1]) q2[1] = xcoords[xcoords.size()-1]; 
+
+            double b = sqrt( pow( (q1[0]+q2[0])/2.0, 2.0) + pow((q1[1]+q2[1])/2,2.0) );
+	    
+            // Dipole schwinger
+	   
+            // Kind of schwinger
+ 	    double q3[2];
+	
+	    // Put new quark randomly between q1 and q2, calculate weighted
+	    // mean with weign in [0.3, 0.7]
+	    double w = gsl_rng_uniform(global_rng)*0.7+0.3;
+
+	    q3[0] = (w*q1[0]+(1.0-w)*q2[0])/1.0;
+	    q3[1] = (w*q1[1]+(1.0-w)*q2[1])/1.0;
+
+	    double s1 = 1.0 - Amplitude(xpom, q1, q3);
+	    double s2 = 1.0 - Amplitude(xpom, q2, q3);
+	    if (s1 < 0) s1 = 0; if (s1>1) s1=1;
+	    if (s2<0) s2=0; if (s2>1) s2=1;
+	    //cout << "r " << r << " Schwinger gives " << s1 << " and " << s2 << endl;
+	    return 1.0 - s1*s2;
+     }
+    // First find corresponding grid indeces
+    double mu_step = GetL_step_(); // GeV^-1
+    WilsonLine quark = GetWilsonLine(q1[0], q1[1]);
+    WilsonLine antiquark = GetWilsonLine(q2[0], q2[1]);
+    
+    WilsonLine quark_1_p_mu = GetWilsonLine(q1[0] + mu_step, q1[1]);
+    WilsonLine quark_2_p_mu = GetWilsonLine(q1[0], q1[1] + mu_step);
+    WilsonLine antiquark_1_p_mu = GetWilsonLine(q2[0] + mu_step, q2[1]);
+    WilsonLine antiquark_2_p_mu = GetWilsonLine(q2[0], q2[1] + mu_step);
+    
+    WilsonLine quark_1_m_mu = GetWilsonLine(q1[0] - mu_step, q1[1]);
+    WilsonLine quark_2_m_mu = GetWilsonLine(q1[0], q1[1] - mu_step);
+    WilsonLine antiquark_1_m_mu = GetWilsonLine(q2[0] - mu_step, q2[1]);
+    WilsonLine antiquark_2_m_mu = GetWilsonLine(q2[0], q2[1] - mu_step);
+    
+    std::complex<double> imagds(0,0.25); std::complex<double> imagnd12(0,-0.08333333333333333);
+    WilsonLine test;
+    try {
+        test = quark.MultiplyByHermitianConjugate(antiquark);
+    } catch (...) {
+        cerr << "Matrix multiplication failed!" << endl;
+        cout << "Quark: " << q1[0] << ", " << q1[1] << endl;
+        cout << quark << endl;
+        cout << "Antiquark: " << q2[0] << ", " << q2[1] << endl;
+        cout << antiquark << endl;
+        exit(1);
+    }
+    WilsonLine quark_tempE1 = quark.MultiplyByHermitianConjugate(quark_1_p_mu) +
+                       quark_1_m_mu.MultiplyByHermitianConjugate(quark) - 
+                       quark_1_p_mu.MultiplyByHermitianConjugate(quark) - 
+                       quark.MultiplyByHermitianConjugate(quark_1_m_mu);
+    WilsonLine E_p_quark_1 = quark_tempE1 * imagds + imagnd12 * (quark_tempE1.Trace());
+    WilsonLine E_m_quark_1 = quark.HermitianConjugate() * E_p_quark_1 * quark;
+    
+    WilsonLine quark_tempE2 = quark.MultiplyByHermitianConjugate(quark_2_p_mu) +
+                       quark_2_m_mu.MultiplyByHermitianConjugate(quark) - 
+                       quark_2_p_mu.MultiplyByHermitianConjugate(quark) - 
+                       quark.MultiplyByHermitianConjugate(quark_2_m_mu);
+    WilsonLine E_p_quark_2 = quark_tempE2 * imagds + imagnd12 * (quark_tempE2.Trace());
+    WilsonLine E_m_quark_2 = quark.HermitianConjugate() * E_p_quark_2 * quark;
+    
+    WilsonLine antiquark_tempE1 = antiquark.MultiplyByHermitianConjugate(antiquark_1_p_mu) +
+                       antiquark_1_m_mu.MultiplyByHermitianConjugate(antiquark) - 
+                       antiquark_1_p_mu.MultiplyByHermitianConjugate(antiquark) - 
+                       antiquark.MultiplyByHermitianConjugate(antiquark_1_m_mu);
+    WilsonLine E_p_antiquark_1 = antiquark_tempE1 * imagds + imagnd12 * (antiquark_tempE1.Trace());
+    WilsonLine E_m_antiquark_1 = antiquark.HermitianConjugate() * E_p_antiquark_1 * antiquark;
+    
+    WilsonLine antiquark_tempE2 = antiquark.MultiplyByHermitianConjugate(antiquark_2_p_mu) +
+                       antiquark_2_m_mu.MultiplyByHermitianConjugate(antiquark) - 
+                       antiquark_2_p_mu.MultiplyByHermitianConjugate(antiquark) - 
+                       antiquark.MultiplyByHermitianConjugate(antiquark_2_m_mu);
+    WilsonLine E_p_antiquark_2 = antiquark_tempE2 * imagds + imagnd12 * (antiquark_tempE2.Trace());
+    WilsonLine E_m_antiquark_2 = antiquark.HermitianConjugate() * E_p_antiquark_2 * antiquark;
+    
+    std::array<double, 6> FTMDs = {0., 0., 0., 0., 0., 0.};
+    WilsonLine WF1qg_part = E_m_quark_1.MultiplyByHermitianConjugate(quark) * antiquark * E_m_antiquark_1 + 
+                            E_m_quark_2.MultiplyByHermitianConjugate(quark) * antiquark * E_m_antiquark_2;
+    FTMDs[0] = WF1qg_part.Trace();
+    
+    /////////////////////
+    WilsonLine prod;
+    try {
+        prod = quark.MultiplyByHermitianConjugate(antiquark);
+        //prod =  quark*antiquark;
+    } catch (...) {
+        cerr << "Matrix multiplication failed!" << endl;
+        cout << "Quark: " << q1[0] << ", " << q1[1] << endl;
+        cout << quark << endl;
+        cout << "Antiquark: " << q2[0] << ", " << q2[1] << endl;
+        cout << antiquark << endl;
+        exit(1);
+    }
+    std::complex<double > amp =  1.0 - 1.0/NC * prod.Trace(); // The scattering amplitude 
+    
+    double result = amp.real();
+    if (result < 0) return 0;
+    return result;
+    if (result > 1)
+        return 1;
+    if (result < 0)
+        return 0;
+
+    if (isnan(result))
+    {
+        cerr << "Wilson line trance NaN, quark coords " << q1[0] << ", " << q1[1] << " and " << q2[0] << ", " << q2[1] << endl;
+	exit(1);
+    } 
+     
+    return result;
+}
+
 // Stupid copypaste
 double IPGlasma::AmplitudeImaginaryPart(double xpom, double q1[2], double q2[2] )
 {
@@ -405,6 +555,8 @@ int IPGlasma::LoadBinaryData(std::string fname, double step)
         InStream.read(reinterpret_cast<char*>(&L), sizeof(double));
         InStream.read(reinterpret_cast<char*>(&a), sizeof(double));
         InStream.read(reinterpret_cast<char*>(&temp), sizeof(double));
+        
+        SetL_step_(a * 5.068); // a is in fm from ipglasma
         
         std::cout << "# BINARY Size is " << N << ", Nc " << Nc << ", length is [fm] " << L << ", a is [fm]" << a << "  (user specified " << step << ")" << std::endl;
         

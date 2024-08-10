@@ -48,6 +48,8 @@ public:
 
     void SetSchwinger(bool s, double rc=0);
     void ApplyPeriodicBoundaryConditions(double q[2]); 
+    void SetL_step_(double a) {L_step_ = a;}
+    double GetL_step_() {return L_step_;}
 
 private:
     
@@ -55,6 +57,7 @@ private:
     std::vector< double > xcoords;
     std::vector< double > ycoords;
     std::vector< WilsonLine  > wilsonlines;
+    double L_step_;
 
     bool schwinger; // true if we use schwinger mechanism
     double schwinger_rc; // Use Schwinger for dipoles larger than schwinger_rc
